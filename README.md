@@ -101,24 +101,29 @@ Pada production, `npm run start` menjalankan backend Node yang sekaligus melayan
 - file statis hasil build Vite dari folder `dist`;
 - fallback route frontend seperti `/admin`, `/lapor`, dan `/cek-status` ke `dist/index.html`.
 
-## Deploy demo ke Render
+## Deploy production ke Ubuntu + Cloudflare Zero Trust
 
-Gunakan Render **Web Service** agar frontend dan backend berada dalam satu origin. Ini membuat session cookie admin lebih sederhana dibanding memisahkan frontend dan API.
+Production saat ini dideploy di server Ubuntu pribadi dan diakses melalui domain `https://sigapsiber.web.id`. Domain dibeli di Domainesia dan trafik publik diteruskan memakai Cloudflare Zero Trust/Tunnel.
 
-Konfigurasi Render:
+Arsitektur ringkas:
 
-- Build command: `npm install && npm run build`
-- Start command: `npm run start`
-- Health check path: `/api/health`
+```text
+sigapsiber.web.id
+  → Cloudflare DNS / Zero Trust / Tunnel
+  → server Ubuntu pribadi
+  → Node.js Sigap Siber
+  → Supabase PostgreSQL + Telegram Bot API
+```
 
-Environment production di Render:
+Environment production di server Ubuntu:
 
 ```env
 NODE_ENV=production
-HOST=0.0.0.0
+APP_URL=https://sigapsiber.web.id
+HOST=127.0.0.1
+PORT=3001
 DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres
 DATABASE_SSL=true
-APP_URL=https://alamat-render-kamu.onrender.com
 APP_SECRET=replace_with_random_secret
 JWT_SECRET=replace_with_random_secret
 TELEGRAM_BOT_TOKEN=replace_with_telegram_bot_token
@@ -127,14 +132,48 @@ TELEGRAM_NOTIFICATIONS_ENABLED=true
 TELEGRAM_PARSE_MODE=HTML
 ```
 
-Sebelum deploy pertama, pastikan database dan akun admin sudah siap dari lokal:
+Catatan:
+
+- `APP_URL` wajib memakai `https://sigapsiber.web.id` agar link Telegram menuju domain production.
+- `HOST=127.0.0.1` cocok jika aplikasi hanya diakses oleh Cloudflare Tunnel atau reverse proxy lokal.
+- Gunakan `HOST=0.0.0.0` hanya jika service memang perlu bind ke semua interface server.
+- Jangan aktifkan Cloudflare Access/Zero Trust policy yang memblokir halaman publik `/`, `/lapor`, dan `/cek-status`, kecuali memang hanya admin/internal yang boleh membuka portal.
+- Jika ingin proteksi tambahan, prioritaskan route admin seperti `/admin/*`.
+
+Deploy/update di server:
 
 ```bash
+npm install
 npm run db:migrate
 npm run auth:create-admin
+npm run build
+npm run start
 ```
 
-Jika URL Render berubah setelah service dibuat, update `APP_URL` di Render lalu redeploy agar tautan Telegram mengarah ke alamat yang benar.
+Untuk production yang stabil, jalankan `npm run start` melalui process manager seperti `systemd` atau `pm2`.
+
+Cloudflare Tunnel/Zero Trust perlu diarahkan ke origin lokal aplikasi, misalnya:
+
+```text
+http://127.0.0.1:3001
+```
+
+Health check:
+
+```bash
+curl https://sigapsiber.web.id/api/health
+```
+
+Jika domain production berubah, update `APP_URL` di environment server lalu restart service agar tautan Telegram mengarah ke alamat yang benar.
+
+## Deploy alternatif ke Render
+
+Render Web Service pernah direncanakan sebagai opsi demo sementara. Jika ingin dipakai lagi:
+
+- Build command: `npm install && npm run build`
+- Start command: `npm run start`
+- Health check path: `/api/health`
+- Gunakan satu service agar frontend dan backend berada dalam satu origin.
 
 ## Halaman utama
 
