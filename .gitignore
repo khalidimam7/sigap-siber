@@ -14,3 +14,7 @@ vite.config.d.ts
 
 # Local backend data
 server/data/*.json
+
+# Private project/deployment notes
+PROJECT_CONTEXT.md
+deployment_private.md

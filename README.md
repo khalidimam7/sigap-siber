@@ -101,25 +101,25 @@ Pada production, `npm run start` menjalankan backend Node yang sekaligus melayan
 - file statis hasil build Vite dari folder `dist`;
 - fallback route frontend seperti `/admin`, `/lapor`, dan `/cek-status` ke `dist/index.html`.
 
-## Deploy production ke Ubuntu + Cloudflare Zero Trust
+## Deploy production
 
-Production saat ini dideploy di server Ubuntu pribadi dan diakses melalui domain `https://sigapsiber.web.id`. Domain dibeli di Domainesia dan trafik publik diteruskan memakai Cloudflare Zero Trust/Tunnel.
+Untuk production, jalankan aplikasi sebagai satu service Node.js yang melayani backend `/api/*` dan frontend hasil build Vite dari folder `dist`. Service ini bisa ditempatkan di VPS/server sendiri atau platform Node.js managed.
 
 Arsitektur ringkas:
 
 ```text
-sigapsiber.web.id
-  → Cloudflare DNS / Zero Trust / Tunnel
-  → server Ubuntu pribadi
+domain publik
+  → DNS / reverse proxy / tunnel
+  → Node.js server
   → Node.js Sigap Siber
   → Supabase PostgreSQL + Telegram Bot API
 ```
 
-Environment production di server Ubuntu:
+Environment production:
 
 ```env
 NODE_ENV=production
-APP_URL=https://sigapsiber.web.id
+APP_URL=https://your-domain.example
 HOST=127.0.0.1
 PORT=3001
 DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres
@@ -134,11 +134,12 @@ TELEGRAM_PARSE_MODE=HTML
 
 Catatan:
 
-- `APP_URL` wajib memakai `https://sigapsiber.web.id` agar link Telegram menuju domain production.
-- `HOST=127.0.0.1` cocok jika aplikasi hanya diakses oleh Cloudflare Tunnel atau reverse proxy lokal.
+- `APP_URL` wajib memakai URL production agar link Telegram menuju domain yang benar.
+- `HOST=127.0.0.1` cocok jika aplikasi hanya diakses oleh reverse proxy/tunnel lokal.
 - Gunakan `HOST=0.0.0.0` hanya jika service memang perlu bind ke semua interface server.
-- Jangan aktifkan Cloudflare Access/Zero Trust policy yang memblokir halaman publik `/`, `/lapor`, dan `/cek-status`, kecuali memang hanya admin/internal yang boleh membuka portal.
-- Jika ingin proteksi tambahan, prioritaskan route admin seperti `/admin/*`.
+- Jangan menaruh secret di frontend atau environment `VITE_*`.
+- Jika memakai access policy/reverse proxy tambahan, pastikan halaman publik `/`, `/lapor`, dan `/cek-status` tetap sesuai kebutuhan akses pengguna.
+- Detail operasional production sebaiknya disimpan di dokumentasi private, bukan README public.
 
 Deploy/update di server:
 
@@ -150,9 +151,9 @@ npm run build
 npm run start
 ```
 
-Untuk production yang stabil, jalankan `npm run start` melalui process manager seperti `systemd` atau `pm2`.
+Untuk production yang stabil, jalankan `npm run start` melalui process manager seperti `systemd`, `pm2`, atau supervisor sejenis.
 
-Cloudflare Tunnel/Zero Trust perlu diarahkan ke origin lokal aplikasi, misalnya:
+Reverse proxy/tunnel perlu diarahkan ke origin lokal aplikasi, misalnya:
 
 ```text
 http://127.0.0.1:3001
@@ -161,7 +162,7 @@ http://127.0.0.1:3001
 Health check:
 
 ```bash
-curl https://sigapsiber.web.id/api/health
+curl https://your-domain.example/api/health
 ```
 
 Jika domain production berubah, update `APP_URL` di environment server lalu restart service agar tautan Telegram mengarah ke alamat yang benar.
