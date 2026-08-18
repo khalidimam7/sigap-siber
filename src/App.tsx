@@ -40,7 +40,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { categories, demoTicketId, Ticket, tickets } from './data'
+import { Attachment, categories, demoTicketId, Ticket, tickets } from './data'
 
 const Logo = ({ compact = false }: { compact?: boolean }) => (
   <div className="brand">
@@ -409,31 +409,47 @@ function AuthGate({ children }: { children: ReactNode }) {
 function ReportPage() {
   const navigate = useNavigate()
   const [reporterType, setReporterType] = useState('Publik Umum')
-  const [files, setFiles] = useState<string[]>([])
+  const [files, setFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    const formElement = e.currentTarget
     setError('')
     setSubmitting(true)
 
-    const form = new FormData(e.currentTarget)
-    const payload = {
-      reporterType,
-      reporterName: String(form.get('reporterName') || ''),
-      agency: String(form.get('agency') || ''),
-      contact: String(form.get('contact') || ''),
-      email: String(form.get('email') || ''),
-      category: String(form.get('category') || ''),
-      occurredAt: String(form.get('occurredAt') || ''),
-      title: String(form.get('title') || ''),
-      asset: String(form.get('asset') || ''),
-      chronology: String(form.get('chronology') || ''),
-      impact: String(form.get('impact') || ''),
-      attachmentNames: files,
-    }
-
     try {
+      const uploaded = []
+      for (const file of files) {
+        const uploadData = new FormData()
+        uploadData.append('file', file)
+        const uploadResponse = await fetch('/api/upload', { method: 'POST', body: uploadData })
+        const uploadResult = await readApiJson(uploadResponse)
+        if (!uploadResponse.ok) throw new Error(uploadResult.error || 'Gagal mengunggah ' + file.name + '.')
+        uploaded.push({
+          originalName: uploadResult.file?.originalName || file.name,
+          storedName: uploadResult.file?.storedName || '',
+          contentType: uploadResult.file?.contentType || file.type || '',
+          sizeBytes: uploadResult.file?.sizeBytes ?? file.size,
+        })
+      }
+
+      const formData = new FormData(formElement)
+      const payload = {
+        reporterType,
+        reporterName: String(formData.get('reporterName') || ''),
+        agency: String(formData.get('agency') || ''),
+        contact: String(formData.get('contact') || ''),
+        email: String(formData.get('email') || ''),
+        category: String(formData.get('category') || ''),
+        occurredAt: String(formData.get('occurredAt') || ''),
+        title: String(formData.get('title') || ''),
+        asset: String(formData.get('asset') || ''),
+        chronology: String(formData.get('chronology') || ''),
+        impact: String(formData.get('impact') || ''),
+        attachments: uploaded,
+      }
+
       const response = await fetch('/api/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -441,7 +457,7 @@ function ReportPage() {
       })
       const data = await readApiJson(response)
       if (!response.ok) throw new Error(data.error || 'Laporan gagal dikirim.')
-      navigate(`/lapor/sukses?ticket=${encodeURIComponent(data.ticket.id)}`)
+      navigate('/lapor/sukses?ticket=' + encodeURIComponent(data.ticket.id))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Backend belum berjalan atau laporan gagal dikirim.')
     } finally {
@@ -480,13 +496,23 @@ function ReportPage() {
               <div className="form-card-head"><span>3</span><div><h2>Bukti Pendukung</h2><p>Unggah screenshot, log, atau dokumen lain bila tersedia.</p></div></div>
               <label className="dropzone">
                 <UploadCloud size={30} /><strong>Tarik file ke sini atau klik untuk memilih</strong><span>PDF, PNG, JPG, TXT, CSV, LOG, ZIP · Maksimal 5 file / 25 MB</span>
-                <input type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files || []).map(f => f.name))} />
+                <input type="file" multiple onChange={(e) => {
+              const selected = Array.from(e.target.files || []).slice(0, 5)
+              const totalSize = selected.reduce((sum, f) => sum + f.size, 0)
+              if (totalSize > 25 * 1024 * 1024) {
+                setError('Total ukuran file melebihi batas 25 MB. Pilih ulang file yang lebih kecil.')
+                e.target.value = ''
+                return
+              }
+              setError('')
+              setFiles(selected)
+            }} />
               </label>
-              {files.length > 0 && <div className="file-list">{files.map(f => <div key={f}><Paperclip size={16} /><span>{f}</span><button type="button" onClick={() => setFiles(files.filter(x => x !== f))}><X size={15} /></button></div>)}</div>}
+              {files.length > 0 && <div className="file-list">{files.map(f => <div key={`${f.name}-${f.size}`}><Paperclip size={16} /><span>{f.name}</span><button type="button" onClick={() => setFiles(files.filter(x => x !== f))}><X size={15} /></button></div>)}</div>}
             </div>
             {error && <div className="form-alert error"><AlertCircle size={18} /><span>{error}</span></div>}
             <div className="consent"><input required type="checkbox" id="consent" /><label htmlFor="consent">Saya menyatakan informasi yang diberikan benar dan menyetujui pemrosesan data untuk penanganan insiden siber.</label></div>
-            <button className="button button-primary submit-button" type="submit" disabled={submitting}>{submitting ? 'Mengirim...' : 'Kirim Laporan'} <ArrowRight size={18} /></button>
+            <button className="button button-primary submit-button" type="submit" disabled={submitting}>{submitting ? 'Mengunggah & mengirim...' : 'Kirim Laporan'} <ArrowRight size={18} /></button>
           </form>
           <aside className="form-aside">
             <div className="aside-card secure-card"><ShieldCheck size={28} /><h3>Laporan Anda dilindungi</h3><p>Detail insiden dan lampiran hanya dapat dilihat oleh petugas portal Sigap Siber.</p></div>
@@ -600,6 +626,24 @@ function formatWaitDuration(from: Date) {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours} jam ${minutes % 60} menit`
   return `${Math.floor(hours / 24)} hari ${hours % 24} jam`
+}
+
+function formatBytes(bytes: number | null | undefined) {
+  if (bytes == null || Number.isNaN(bytes)) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1).replace('.', ',')} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`
+}
+
+function formatAttachmentMeta(attachment: Attachment) {
+  const parts: string[] = []
+  if (attachment.contentType) {
+    const label = attachment.contentType.split('/')[1]?.toUpperCase()
+    if (label) parts.push(label)
+  }
+  const sizeLabel = formatBytes(attachment.sizeBytes)
+  if (sizeLabel) parts.push(sizeLabel)
+  return parts.join(' · ') || 'File lampiran'
 }
 
 function exportTicketsCsv(items: Ticket[]) {
@@ -925,7 +969,7 @@ function TicketDetailPage() {
     <div className="ticket-detail-header"><div><StatusBadge status={status} /><PriorityBadge priority={priority} />{savingStatus && <span className="save-state">Menyimpan...</span>}{deletingTicket && <span className="save-state">Menghapus...</span>}{saveMessage && <span className="save-state">{saveMessage}</span>}</div><div><button className="button button-danger" onClick={deleteCurrentTicket} disabled={savingStatus || deletingTicket}><Trash2 size={16} /> Hapus Tiket</button><button className="button button-secondary"><ExternalLink size={16} /> Hubungi Pelapor</button><select value={priority} onChange={e => changePriority(e.target.value as Ticket['priority'])} disabled={savingStatus || deletingTicket} aria-label="Ubah tingkat keparahan"><option>Rendah</option><option>Sedang</option><option>Tinggi</option><option>Kritis</option></select><select value={status} onChange={e => changeStatus(e.target.value as Ticket['status'])} disabled={savingStatus || deletingTicket} aria-label="Ubah status tiket"><option>Baru</option><option>Verifikasi</option><option>Dalam Penanganan</option><option>Menunggu Pelapor</option><option>Selesai</option><option>Ditutup</option><option>Ditolak</option><option>Duplikat</option></select></div></div>
     <div className="detail-grid"><div className="detail-main">
       <section className="panel detail-card"><span className="section-kicker">RINGKASAN INSIDEN</span><h2>{ticket.title}</h2><div className="detail-pairs"><div><span>Kategori</span><strong>{ticket.category}</strong></div><div><span>Aset terdampak</span><strong>{ticket.asset}</strong></div><div><span>Waktu laporan</span><strong>{ticket.createdAt}</strong></div><div><span>Penanggung jawab</span><strong>{ticket.assignee}</strong></div></div><hr /><h3>Kronologi</h3><p>{ticket.chronology}</p><h3>Dampak</h3><p>{ticket.impact}</p></section>
-      <section className="panel detail-card"><div className="panel-head"><div><h2>Lampiran</h2><p>Bukti yang disertakan pelapor</p></div></div><div className="attachment"><div><FileText /><span><strong>screenshot-halaman.png</strong><small>PNG · 1,8 MB · Pemindaian aman</small></span></div><button><Download /></button></div><div className="attachment"><div><FileText /><span><strong>access-log.zip</strong><small>ZIP · 4,2 MB · Pemindaian aman</small></span></div><button><Download /></button></div></section>
+      <section className="panel detail-card"><div className="panel-head"><div><h2>Lampiran</h2><p>Bukti yang disertakan pelapor</p></div></div>{(ticket.attachments || []).length > 0 ? (ticket.attachments || []).map((attachment, index) => { const downloadHref = attachment.storedName && attachment.id != null ? '/api/tickets/' + encodeURIComponent(ticket.id) + '/attachments/' + attachment.id : ''; return <div className="attachment" key={attachment.id ?? index}><div><FileText /><span><strong>{attachment.fileName}</strong><small>{formatAttachmentMeta(attachment)}</small></span></div>{downloadHref ? <a className="attachment-download" href={downloadHref} title="Unduh lampiran"><Download /></a> : <span />}</div> }) : <div className="empty-state"><FileText size={28} /><h2>Belum ada lampiran</h2><p>File yang diunggah pelapor akan tampil di sini.</p></div>}</section>
       <section className="panel detail-card"><div className="panel-head"><div><h2>Catatan Internal</h2><p>Hanya terlihat oleh petugas portal</p></div></div><textarea rows={4} placeholder="Tambahkan hasil analisis atau tindakan penanganan..." /><div className="note-actions"><button className="button button-secondary"><Paperclip size={16} /> Lampirkan</button><button className="button button-primary">Simpan Catatan</button></div><div className="activity-list"><div><span className="activity-avatar">RH</span><div><strong>Rahmat Hidayat</strong><small>22 Jun 2026, 15.18 WIB</small><p>Akses publik telah dibatasi. Tim sedang memeriksa perubahan file dan log akses terakhir.</p></div></div><div><span className="activity-icon"><Activity /></span><div><strong>Status diubah</strong><small>22 Jun 2026, 14.48 WIB</small><p>Verifikasi → Dalam Penanganan</p></div></div></div></section>
     </div><aside className="detail-side">
       <section className="panel detail-card"><h3>Informasi Pelapor</h3><div className="reporter-profile"><span>{ticket.reporter.split(' ').map(x=>x[0]).join('').slice(0,2)}</span><div><strong>{ticket.reporter}</strong><small>{ticket.reporterType}{ticket.agency ? ` · ${ticket.agency}` : ''}</small></div></div><div className="side-list"><div><span>Nomor kontak</span><strong>+{ticket.contact}</strong></div><div><span>Email</span><strong>{ticket.email || 'Tidak diisi'}</strong></div><div><span>Notifikasi Telegram</span><strong>{ticket.notification?.status || 'Belum ada'}</strong></div></div></section>

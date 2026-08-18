@@ -10,6 +10,14 @@ export type TicketStatus =
 
 export type Priority = 'Kritis' | 'Tinggi' | 'Sedang' | 'Rendah'
 
+export type Attachment = {
+  id: number | null
+  fileName: string
+  storedName: string
+  contentType: string
+  sizeBytes: number | null
+}
+
 export type TicketStatusHistory = {
   status: TicketStatus
   changedAt: string
@@ -38,7 +46,7 @@ export type Ticket = {
   publicNote: string
   email?: string
   occurredAt?: string
-  attachments?: string[]
+  attachments?: Attachment[]
   statusHistory?: TicketStatusHistory[]
   notification?: {
     channel: string

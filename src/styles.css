@@ -130,3 +130,7 @@ button { color: inherit; }
 }
 
 .chart-empty { min-height: 300px; box-sizing: border-box; }
+
+.attachment .attachment-download { border: 0; background: transparent; color: #779093; cursor: pointer; text-decoration: none; padding: 5px; display: grid; place-items: center; }
+.attachment .attachment-download:hover { color: var(--teal); }
+.attachment .attachment-download svg { width: 17px; }

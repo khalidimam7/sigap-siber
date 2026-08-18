@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
-import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { createReadStream, existsSync } from 'node:fs'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Pool } from 'pg'
 import {
@@ -44,6 +44,10 @@ const MIME_TYPES = {
   '.ttf': 'font/ttf',
 }
 
+const UPLOAD_DIR = path.join(process.cwd(), 'server', 'uploads')
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+const MAX_ATTACHMENTS = 5
+
 validateDatabaseUrl(DATABASE_URL)
 
 const pool = new Pool({
@@ -64,6 +68,182 @@ async function readJson(req) {
     throw error
   }
 }
+async function readBodyWithLimit(req, maxBytes) {
+  const chunks = []
+  let received = 0
+  for await (const chunk of req) {
+    received += chunk.length
+    if (received > maxBytes) {
+      const error = new Error('Unggahan melebihi batas ukuran yang diizinkan.')
+      error.statusCode = 413
+      throw error
+    }
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+function parseContentDisposition(value) {
+  const result = {}
+  for (const part of String(value || '').split(';')) {
+    const trimmed = part.trim()
+    const eq = trimmed.indexOf('=')
+    if (eq === -1) continue
+    const key = trimmed.slice(0, eq).trim()
+    const raw = trimmed.slice(eq + 1).trim()
+    result[key] = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw
+  }
+  return result
+}
+
+function parseMultipartBody(buffer, boundary) {
+  const delimiter = Buffer.from('--' + boundary)
+  const parts = []
+  let cursor = 0
+  while (cursor < buffer.length) {
+    const start = buffer.indexOf(delimiter, cursor)
+    if (start === -1) break
+    const afterDelimiter = start + delimiter.length
+    if (buffer.subarray(afterDelimiter, afterDelimiter + 2).toString() === '--') break
+    const headerEnd = buffer.indexOf('\r\n\r\n', afterDelimiter)
+    if (headerEnd === -1) break
+    const headerText = buffer.subarray(afterDelimiter, headerEnd).toString('utf8')
+    const bodyStart = headerEnd + 4
+    const bodyEnd = buffer.indexOf('\r\n' + delimiter.toString(), bodyStart)
+    if (bodyEnd === -1) break
+    const headers = {}
+    for (const line of headerText.split('\r\n')) {
+      const colon = line.indexOf(':')
+      if (colon === -1) continue
+      headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim()
+    }
+    parts.push({ headers, body: buffer.subarray(bodyStart, bodyEnd) })
+    cursor = bodyEnd + 2
+  }
+  return parts
+}
+
+function sanitizeStoredFileName(originalName) {
+  const base = path.basename(String(originalName || 'file').replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f"\\]/g, '_').trim()
+  return randomUUID() + '-' + (base || 'file')
+}
+
+async function saveUploadedFile(req) {
+  const contentType = String(req.headers['content-type'] || '')
+  if (!contentType.startsWith('multipart/form-data')) {
+    const error = new Error('Unggahan harus berupa multipart/form-data.')
+    error.statusCode = 415
+    throw error
+  }
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i)
+  if (!boundaryMatch) {
+    const error = new Error('Format multipart tidak valid (boundary tidak ditemukan).')
+    error.statusCode = 400
+    throw error
+  }
+  const boundary = boundaryMatch[1] || boundaryMatch[2]
+  const buffer = await readBodyWithLimit(req, MAX_UPLOAD_BYTES + 64 * 1024)
+  const parts = parseMultipartBody(buffer, boundary)
+  const filePart = parts.find(part => {
+    const disposition = parseContentDisposition(part.headers['content-disposition'])
+    return Boolean(disposition.filename)
+  })
+  if (!filePart) {
+    const error = new Error('File tidak ditemukan pada unggahan.')
+    error.statusCode = 400
+    throw error
+  }
+  const disposition = parseContentDisposition(filePart.headers['content-disposition'])
+  const originalName = path.basename(String(disposition.filename || '').replace(/\\/g, '/'))
+  if (!originalName) {
+    const error = new Error('Nama file tidak valid.')
+    error.statusCode = 400
+    throw error
+  }
+  if (filePart.body.length > MAX_UPLOAD_BYTES) {
+    const error = new Error('Ukuran file melebihi batas ' + Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) + ' MB.')
+    error.statusCode = 413
+    throw error
+  }
+
+  const storedName = sanitizeStoredFileName(originalName)
+  await mkdir(UPLOAD_DIR, { recursive: true })
+  await writeFile(path.join(UPLOAD_DIR, storedName), filePart.body)
+
+  return {
+    originalName,
+    storedName,
+    contentType: String(filePart.headers['content-type'] || 'application/octet-stream'),
+    sizeBytes: filePart.body.length,
+  }
+}
+
+function toAttachment(row) {
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    storedName: row.stored_name || '',
+    contentType: row.content_type || '',
+    sizeBytes: row.size_bytes != null ? Number(row.size_bytes) : null,
+  }
+}
+
+function normalizeAttachments(payload) {
+  if (Array.isArray(payload.attachments)) {
+    return payload.attachments.slice(0, MAX_ATTACHMENTS).map(item => ({
+      id: null,
+      fileName: String(item.originalName || item.fileName || '').trim(),
+      storedName: item.storedName ? String(item.storedName).trim() : '',
+      contentType: item.contentType ? String(item.contentType) : '',
+      sizeBytes: item.sizeBytes != null ? Number(item.sizeBytes) : null,
+    })).filter(item => item.fileName)
+  }
+  if (Array.isArray(payload.attachmentNames)) {
+    return payload.attachmentNames.slice(0, MAX_ATTACHMENTS).map(name => ({
+      id: null,
+      fileName: String(name).trim(),
+      storedName: '',
+      contentType: '',
+      sizeBytes: null,
+    })).filter(item => item.fileName)
+  }
+  return []
+}
+
+async function serveTicketAttachment(res, ticketId, attachmentId) {
+  if (!/^\d+$/.test(attachmentId)) return notFound(res)
+  const result = await pool.query(
+    `select id, ticket_id, file_name, stored_name, content_type, size_bytes
+     from ticket_attachments
+     where id = $1::bigint and lower(ticket_id) = lower($2)
+     limit 1`,
+    [attachmentId, ticketId],
+  )
+  if (result.rowCount === 0) return notFound(res)
+  const row = result.rows[0]
+  if (!row.stored_name) return notFound(res)
+  const filePath = path.join(UPLOAD_DIR, row.stored_name)
+  if (!isPathInside(UPLOAD_DIR, filePath)) return notFound(res)
+
+  let fileStat
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    return notFound(res)
+  }
+  if (!fileStat.isFile()) return notFound(res)
+
+  const downloadName = String(row.file_name || 'lampiran').replace(/["\\\r\n]/g, '_')
+  res.writeHead(200, {
+    'Content-Type': row.content_type || 'application/octet-stream',
+    'Content-Length': fileStat.size,
+    'Content-Disposition': 'attachment; filename="' + downloadName + '"',
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, no-store',
+  })
+  createReadStream(filePath).on('error', () => res.destroy()).pipe(res)
+}
+
 
 function sendJson(res, statusCode, data, extraHeaders = {}) {
   res.writeHead(statusCode, {
@@ -337,7 +517,7 @@ async function hydrateTickets(rows) {
   if (!rows.length) return []
   const ids = rows.map(row => row.id)
   const [attachmentResult, notificationResult, statusHistoryResult] = await Promise.all([
-    pool.query('select ticket_id, file_name from ticket_attachments where ticket_id = any($1::text[]) order by id asc', [ids]),
+    pool.query('select id, ticket_id, file_name, stored_name, content_type, size_bytes from ticket_attachments where ticket_id = any($1::text[]) order by id asc', [ids]),
     pool.query(
       `select distinct on (ticket_id) *
        from notifications
@@ -357,7 +537,7 @@ async function hydrateTickets(rows) {
   const attachmentMap = new Map()
   for (const row of attachmentResult.rows) {
     const list = attachmentMap.get(row.ticket_id) || []
-    list.push(row.file_name)
+    list.push(toAttachment(row))
     attachmentMap.set(row.ticket_id, list)
   }
 
@@ -585,9 +765,13 @@ async function createTicket(payload) {
       ],
     )
 
-    const attachments = Array.isArray(payload.attachmentNames) ? payload.attachmentNames.slice(0, 5) : []
-    for (const fileName of attachments) {
-      await client.query('insert into ticket_attachments (ticket_id, file_name) values ($1, $2)', [id, String(fileName)])
+    const attachments = normalizeAttachments(payload)
+    for (const attachment of attachments) {
+      await client.query(
+        `insert into ticket_attachments (ticket_id, file_name, stored_name, content_type, size_bytes)
+         values ($1, $2, $3, $4, $5)`,
+        [id, attachment.fileName, attachment.storedName || null, attachment.contentType || null, attachment.sizeBytes != null ? attachment.sizeBytes : null],
+      )
     }
 
     await client.query(
@@ -908,6 +1092,20 @@ const server = createServer(async (req, res) => {
       const ticket = await createTicket(await readJson(req))
       await writeAuditLog({ action: 'ticket.created', targetType: 'ticket', targetId: ticket.id })
       sendJson(res, 201, { ticket: toPublicTicket(ticket), notification: ticket.notification })
+      return
+    }
+
+    const attachmentMatch = pathname.match(/^\/api\/tickets\/([^/]+)\/attachments\/([^/]+)$/)
+    if (req.method === 'GET' && attachmentMatch) {
+      const session = await requireAdmin(req, res)
+      if (!session) return
+      await serveTicketAttachment(res, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]))
+      return
+    }
+
+    if (req.method === 'POST' && pathname === '/api/upload') {
+      const file = await saveUploadedFile(req)
+      sendJson(res, 201, { file })
       return
     }
 
