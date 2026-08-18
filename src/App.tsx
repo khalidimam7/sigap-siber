@@ -48,7 +48,7 @@ const Logo = ({ compact = false }: { compact?: boolean }) => (
     {!compact && (
       <div>
         <strong>SIGAP<span> SIBER</span></strong>
-        <small>Portal Insiden Siber</small>
+        <small>Portal Pelaporan Insiden Siber</small>
       </div>
     )}
   </div>
@@ -125,9 +125,9 @@ function HomePage() {
         <div className="hero-grid-overlay" />
         <div className="container hero-content">
           <div className="hero-copy">
-            <div className="eyebrow"><span /> Kanal Resmi Pelaporan Insiden Siber</div>
+            <div className="eyebrow"><span /> Kanal Pelaporan Insiden Siber Pemkab Bireuen</div>
             <h1>Temukan ancaman.<br /><em>Laporkan segera.</em></h1>
-            <p>Bantu kami menjaga ruang digital Kabupaten Bireuen. Laporkan dugaan insiden siber dengan aman, cepat, dan rahasia.</p>
+            <p>Bantu kami menjaga ruang digital Pemerintah Kabupaten Bireuen. Laporkan dugaan insiden siber dengan aman, cepat, dan rahasia.</p>
             <div className="hero-actions">
               <Link className="button button-accent" to="/lapor">Lapor Insiden Sekarang <ArrowRight size={18} /></Link>
               <Link className="button button-ghost-light" to="/cek-status"><Search size={18} /> Cek Status Tiket</Link>
