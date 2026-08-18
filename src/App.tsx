@@ -277,6 +277,90 @@ function useBackendTickets() {
   return { tickets: items, loading, error }
 }
 
+type BackendStats = {
+  total: number
+  periodLabel: string
+  rangeLabel: string
+  avgResponseMinutes: number | null
+  avgResolutionMinutes: number | null
+  respondedCount: number
+  slaResponseMinutes: number
+  slaTargetPercent: number
+  slaCompliancePercent: number | null
+  monthlyVolume: { key: string; label: string; monthLong: string; year: string; count: number }[]
+  reporterBreakdown: { type: 'OPD' | 'Publik'; count: number; percent: number }[]
+}
+
+function useBackendStats() {
+  const navigate = useNavigate()
+  const [stats, setStats] = useState<BackendStats | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError('')
+    fetch('/api/stats', { credentials: 'include' })
+      .then(async response => {
+        if (response.status === 401) {
+          navigate('/admin/login')
+          throw new Error('Sesi berakhir. Silakan login ulang.')
+        }
+        if (!response.ok) throw new Error('API statistik tidak tersedia')
+        return readApiJson(response)
+      })
+      .then(data => {
+        if (active && data?.stats) setStats(data.stats)
+      })
+      .catch(err => {
+        if (active) setError(err instanceof Error ? err.message : 'Gagal memuat statistik.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [navigate])
+
+  return { stats, loading, error }
+}
+
+function formatStatsMinutes(minutes: number | null | undefined) {
+  if (minutes == null || Number.isNaN(minutes)) return '—'
+  const rounded = Math.max(0, Math.round(minutes))
+  if (rounded < 60) return `${rounded}m`
+  const hours = rounded / 60
+  const label = hours >= 10 ? String(Math.round(hours)) : hours.toFixed(1).replace('.', ',')
+  return `${label}h`
+}
+
+function exportStatsCsv(stats: BackendStats) {
+  const escape = (value: string | number) => `"${String(value ?? '').replace(/"/g, '""')}"`
+  const rows = [
+    ['Metrik', 'Nilai'],
+    ['Total laporan', stats.total],
+    ['Rata-rata respons', stats.avgResponseMinutes == null ? '' : formatStatsMinutes(stats.avgResponseMinutes)],
+    ['Pemenuhan SLA', stats.slaCompliancePercent == null ? '' : `${stats.slaCompliancePercent}%`],
+    ['Rata-rata selesai', stats.avgResolutionMinutes == null ? '' : formatStatsMinutes(stats.avgResolutionMinutes)],
+    [],
+    ['Periode', 'Bulan', 'Jumlah Laporan'],
+    ...stats.monthlyVolume.map(item => [stats.rangeLabel, item.label, item.count]),
+    [],
+    ['Jenis Pelapor', 'Jumlah', 'Persentase'],
+    ...stats.reporterBreakdown.map(row => [row.type, row.count, `${row.percent}%`]),
+  ].map(row => row.map(escape).join(','))
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `sigap-siber-statistik-${dayKey(new Date())}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 function getInitials(name = 'Admin') {
   return name
     .split(/\s+/)
@@ -852,7 +936,54 @@ function TicketDetailPage() {
 }
 
 function StatsPage() {
-  return <AdminLayout title="Statistik" subtitle="Ringkasan performa dan pola laporan insiden." action={<button className="button button-secondary"><Download size={17} /> Export CSV</button>}><div className="metric-grid compact-metrics"><div className="metric-card"><span>Total laporan</span><strong>132</strong><small>Juni 2026</small></div><div className="metric-card"><span>Rata-rata respons</span><strong>42m</strong><small className="green">12% lebih cepat</small></div><div className="metric-card"><span>Pemenuhan SLA</span><strong>94%</strong><small>Target 90%</small></div><div className="metric-card"><span>Rata-rata selesai</span><strong>2,4h</strong><small>Semua prioritas</small></div></div><div className="dashboard-grid"><section className="panel trend-panel"><div className="panel-head"><div><h2>Volume Laporan</h2><p>Januari–Juni 2026</p></div></div><div className="chart tall"><div className="y-axis"><span>150</span><span>100</span><span>50</span><span>0</span></div><div className="bars">{[72,89,67,104,118,132].map((v,i)=><div key={i}><span style={{height:`${v/150*100}%`}}><i>{v}</i></span><small>{['Jan','Feb','Mar','Apr','Mei','Jun'][i]}</small></div>)}</div></div></section><section className="panel category-panel"><div className="panel-head"><div><h2>Jenis Pelapor</h2><p>Juni 2026</p></div></div><div className="donut-wrap"><div className="donut"><div><strong>132</strong><span>Laporan</span></div></div><div className="donut-legend"><div><i className="teal" /><span>OPD</span><b>78%</b></div><div><i className="yellow" /><span>Publik</span><b>22%</b></div></div></div></section></div></AdminLayout>
+  const { stats, loading, error } = useBackendStats()
+  const volume = stats?.monthlyVolume || []
+  const peak = Math.max(...volume.map(item => item.count), 1)
+  const axisMax = Math.max(3, Math.ceil(peak / 3) * 3)
+  const yAxis = [axisMax, Math.round(axisMax * 0.75), Math.round(axisMax * 0.5), Math.round(axisMax * 0.25), 0]
+  const opd = stats?.reporterBreakdown.find(row => row.type === 'OPD')
+  const publik = stats?.reporterBreakdown.find(row => row.type === 'Publik')
+  const opdPercent = opd?.percent || 0
+  const donutStyle = { background: `conic-gradient(var(--teal) 0 ${opdPercent}%, var(--yellow) ${opdPercent}% 100%)` }
+
+  return (
+    <AdminLayout
+      title="Statistik"
+      subtitle={loading ? 'Memuat statistik dari database...' : error ? 'Gagal memuat data statistik.' : 'Ringkasan performa dan pola laporan insiden.'}
+      action={<button className="button button-secondary" disabled={!stats} onClick={() => stats && exportStatsCsv(stats)}><Download size={17} /> Export CSV</button>}
+    >
+      <div className="metric-grid compact-metrics">
+        <div className="metric-card"><span>Total laporan</span><strong>{stats ? stats.total : '—'}</strong><small>{loading ? 'Memuat...' : stats?.periodLabel || 'Belum ada data'}</small></div>
+        <div className="metric-card"><span>Rata-rata respons</span><strong>{stats ? formatStatsMinutes(stats.avgResponseMinutes) : '—'}</strong><small className="green">{stats?.respondedCount ? `${stats.respondedCount} tiket direspons` : 'Belum ada respons'}</small></div>
+        <div className="metric-card"><span>Pemenuhan SLA</span><strong>{stats?.slaCompliancePercent != null ? `${stats.slaCompliancePercent}%` : '—'}</strong><small>Target {stats?.slaTargetPercent ?? 90}%</small></div>
+        <div className="metric-card"><span>Rata-rata selesai</span><strong>{stats ? formatStatsMinutes(stats.avgResolutionMinutes) : '—'}</strong><small>Semua prioritas</small></div>
+      </div>
+      <div className="dashboard-grid">
+        <section className="panel trend-panel">
+          <div className="panel-head"><div><h2>Volume Laporan</h2><p>{loading ? '6 bulan terakhir' : stats?.rangeLabel || '6 bulan terakhir'}</p></div></div>
+          {stats && stats.total > 0 ? (
+            <div className="chart tall"><div className="y-axis">{yAxis.map(value => <span key={value}>{value}</span>)}</div><div className="bars">{volume.map(item => <div key={item.key}><span style={{ height: `${item.count / axisMax * 100}%` }}><i>{item.count}</i></span><small>{item.label}</small></div>)}</div></div>
+          ) : (
+            <div className="empty-state chart-empty"><BarChart3 size={28} /><h2>{loading ? 'Memuat data...' : 'Belum ada data laporan'}</h2><p>{loading ? 'Statistik sedang dihitung dari database.' : 'Grafik akan muncul setelah ada laporan masuk.'}</p></div>
+          )}
+        </section>
+        <section className="panel category-panel">
+          <div className="panel-head"><div><h2>Jenis Pelapor</h2><p>{stats?.periodLabel || 'Bulan ini'}</p></div></div>
+          {stats && stats.total > 0 ? (
+            <div className="donut-wrap">
+              <div className="donut" style={donutStyle}><div><strong>{stats.total}</strong><span>Laporan</span></div></div>
+              <div className="donut-legend">
+                <div><i className="teal" /><span>OPD</span><b>{opdPercent}%</b></div>
+                <div><i className="yellow" /><span>Publik</span><b>{publik?.percent || 0}%</b></div>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state"><BarChart3 size={28} /><h2>{loading ? 'Memuat data...' : 'Belum ada data pelapor'}</h2><p>Distribusi pelapor akan muncul setelah laporan masuk.</p></div>
+          )}
+        </section>
+      </div>
+    </AdminLayout>
+  )
 }
 
 function UsersPage() {

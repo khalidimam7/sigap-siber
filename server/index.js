@@ -372,6 +372,103 @@ async function hydrateTickets(rows) {
   return rows.map(row => toTicket(row, attachmentMap.get(row.id) || [], notificationMap.get(row.id), statusHistoryMap.get(row.id) || []))
 }
 
+const statsMonthFormatter = new Intl.DateTimeFormat('id-ID', { month: 'long', timeZone: 'Asia/Jakarta' })
+const statsShortMonthFormatter = new Intl.DateTimeFormat('id-ID', { month: 'short', timeZone: 'Asia/Jakarta' })
+
+function formatStatsRange(months) {
+  if (!months.length) return ''
+  const first = months[0]
+  const last = months[months.length - 1]
+  if (first.year === last.year) {
+    return first.monthLong + '–' + last.monthLong + ' ' + last.year
+  }
+  return first.monthLong + ' ' + first.year + '–' + last.monthLong + ' ' + last.year
+}
+
+async function readStats() {
+  const totalResult = await pool.query('select count(*)::int as total from tickets')
+  const total = totalResult.rows[0]?.total || 0
+
+  const monthResult = await pool.query(
+    `select to_char(date_trunc('month', created_at), 'YYYY-MM') as key,
+            count(*)::int as count
+     from tickets
+     where created_at >= date_trunc('month', now()) - interval '5 months'
+     group by 1
+     order by 1`,
+  )
+  const monthCounts = new Map(monthResult.rows.map(row => [row.key, row.count]))
+
+  const now = new Date()
+  const monthlyVolume = []
+  for (let offset = 5; offset >= 0; offset -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth() - offset, 1)
+    const key = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0')
+    monthlyVolume.push({
+      key,
+      label: statsShortMonthFormatter.format(date).replace('.', ''),
+      monthLong: statsMonthFormatter.format(date),
+      year: String(date.getFullYear()),
+      count: monthCounts.get(key) || 0,
+    })
+  }
+
+  const reporterResult = await pool.query(
+    `select reporter_type, count(*)::int as count
+     from tickets
+     group by reporter_type`,
+  )
+  const reporterCounts = new Map(reporterResult.rows.map(row => [row.reporter_type, row.count]))
+  const reporterBreakdown = ['OPD', 'Publik'].map(type => ({
+    type,
+    count: reporterCounts.get(type) || 0,
+    percent: total ? Math.round(((reporterCounts.get(type) || 0) / total) * 100) : 0,
+  }))
+
+  const slaResponseMinutes = Math.max(1, Number(process.env.SLA_RESPONSE_MINUTES || 60))
+  const timesResult = await pool.query(
+    `with first_response as (
+       select t.id, t.created_at, min(h.changed_at) as responded_at
+       from tickets t
+       join ticket_status_history h on h.ticket_id = t.id and h.status <> 'Baru'
+       group by t.id, t.created_at
+     ),
+     resolved as (
+       select t.id, t.created_at, min(h.changed_at) as resolved_at
+       from tickets t
+       join ticket_status_history h on h.ticket_id = t.id and h.status in ('Selesai', 'Ditutup')
+       group by t.id, t.created_at
+     )
+     select
+       (select count(*)::int from first_response) as responded_count,
+       (select round(avg(extract(epoch from (responded_at - created_at)) / 60)::numeric, 1)
+        from first_response) as avg_response_minutes,
+       (select round(avg(extract(epoch from (resolved_at - created_at)) / 60)::numeric, 1)
+        from resolved) as avg_resolution_minutes,
+       (select count(*)::int from first_response
+        where extract(epoch from (responded_at - created_at)) / 60 <= $1) as within_sla_count`,
+    [slaResponseMinutes],
+  )
+  const times = timesResult.rows[0]
+  const respondedCount = times?.responded_count || 0
+
+  return {
+    total,
+    periodLabel: statsMonthFormatter.format(now) + ' ' + now.getFullYear(),
+    rangeLabel: formatStatsRange(monthlyVolume),
+    avgResponseMinutes: times?.avg_response_minutes != null ? Number(times.avg_response_minutes) : null,
+    avgResolutionMinutes: times?.avg_resolution_minutes != null ? Number(times.avg_resolution_minutes) : null,
+    respondedCount,
+    slaResponseMinutes,
+    slaTargetPercent: 90,
+    slaCompliancePercent: respondedCount
+      ? Math.round(((times.within_sla_count || 0) / respondedCount) * 100)
+      : null,
+    monthlyVolume,
+    reporterBreakdown,
+  }
+}
+
 function escapeHtml(value = '') {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -790,6 +887,20 @@ const server = createServer(async (req, res) => {
         metadata: { count: tickets.length },
       })
       sendJson(res, 200, { tickets })
+      return
+    }
+
+    if (req.method === 'GET' && pathname === '/api/stats') {
+      const session = await requireAdmin(req, res)
+      if (!session) return
+      const stats = await readStats()
+      await writeAuditLog({
+        actor: session.user.id,
+        action: 'admin.stats.view',
+        targetType: 'ticket',
+        metadata: { total: stats.total },
+      })
+      sendJson(res, 200, { stats })
       return
     }
 
