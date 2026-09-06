@@ -441,6 +441,7 @@ function ReportPage() {
         agency: String(formData.get('agency') || ''),
         contact: String(formData.get('contact') || ''),
         email: String(formData.get('email') || ''),
+        nik: String(formData.get('nik') || '').replace(/\s+/g, ''),
         category: String(formData.get('category') || ''),
         occurredAt: String(formData.get('occurredAt') || ''),
         title: String(formData.get('title') || ''),
@@ -478,6 +479,7 @@ function ReportPage() {
                 <Field label="Nama Lengkap" required><input name="reporterName" required placeholder="Masukkan nama lengkap" /></Field>
                 {reporterType === 'Perwakilan OPD' && <Field label="Nama OPD" required><input name="agency" required placeholder="Contoh: Dinas Pendidikan" /></Field>}
                 <Field label="Nomor Kontak" required hint="Hanya untuk tindak lanjut manual, bukan notifikasi otomatis."><input name="contact" required type="tel" placeholder="08xxxxxxxxxx" /></Field>
+                <Field label="NIK (opsional)" hint="16 digit sesuai KTP untuk mempermudah verifikasi identitas."><input name="nik" inputMode="numeric" maxLength={16} pattern="[0-9]{16}" title="NIK harus 16 digit angka" placeholder="16 digit NIK" /></Field>
                 <Field label="Email (opsional)"><input name="email" type="email" placeholder="nama@email.go.id" /></Field>
               </div>
             </div>
@@ -649,7 +651,7 @@ function formatAttachmentMeta(attachment: Attachment) {
 function exportTicketsCsv(items: Ticket[]) {
   const escape = (value = '') => `"${String(value).replace(/"/g, '""')}"`
   const rows = [
-    ['Nomor Tiket', 'Judul', 'Kategori', 'Prioritas', 'Status', 'Pelapor', 'Jenis Pelapor', 'OPD', 'Tanggal Dibuat'].map(escape).join(','),
+    ['Nomor Tiket', 'Judul', 'Kategori', 'Prioritas', 'Status', 'Pelapor', 'Jenis Pelapor', 'OPD', 'NIK', 'Tanggal Dibuat'].map(escape).join(','),
     ...items.map(ticket => [
       ticket.id,
       ticket.title,
@@ -659,6 +661,7 @@ function exportTicketsCsv(items: Ticket[]) {
       ticket.reporter,
       ticket.reporterType,
       ticket.agency || '',
+      ticket.nik || '',
       ticket.createdAt,
     ].map(escape).join(',')),
   ]
@@ -972,7 +975,7 @@ function TicketDetailPage() {
       <section className="panel detail-card"><div className="panel-head"><div><h2>Lampiran</h2><p>Bukti yang disertakan pelapor</p></div></div>{(ticket.attachments || []).length > 0 ? (ticket.attachments || []).map((attachment, index) => { const downloadHref = attachment.storedName && attachment.id != null ? '/api/tickets/' + encodeURIComponent(ticket.id) + '/attachments/' + attachment.id : ''; return <div className="attachment" key={attachment.id ?? index}><div><FileText /><span><strong>{attachment.fileName}</strong><small>{formatAttachmentMeta(attachment)}</small></span></div>{downloadHref ? <a className="attachment-download" href={downloadHref} title="Unduh lampiran"><Download /></a> : <span />}</div> }) : <div className="empty-state"><FileText size={28} /><h2>Belum ada lampiran</h2><p>File yang diunggah pelapor akan tampil di sini.</p></div>}</section>
       <section className="panel detail-card"><div className="panel-head"><div><h2>Catatan Internal</h2><p>Hanya terlihat oleh petugas portal</p></div></div><textarea rows={4} placeholder="Tambahkan hasil analisis atau tindakan penanganan..." /><div className="note-actions"><button className="button button-secondary"><Paperclip size={16} /> Lampirkan</button><button className="button button-primary">Simpan Catatan</button></div><div className="activity-list"><div><span className="activity-avatar">RH</span><div><strong>Rahmat Hidayat</strong><small>22 Jun 2026, 15.18 WIB</small><p>Akses publik telah dibatasi. Tim sedang memeriksa perubahan file dan log akses terakhir.</p></div></div><div><span className="activity-icon"><Activity /></span><div><strong>Status diubah</strong><small>22 Jun 2026, 14.48 WIB</small><p>Verifikasi → Dalam Penanganan</p></div></div></div></section>
     </div><aside className="detail-side">
-      <section className="panel detail-card"><h3>Informasi Pelapor</h3><div className="reporter-profile"><span>{ticket.reporter.split(' ').map(x=>x[0]).join('').slice(0,2)}</span><div><strong>{ticket.reporter}</strong><small>{ticket.reporterType}{ticket.agency ? ` · ${ticket.agency}` : ''}</small></div></div><div className="side-list"><div><span>Nomor kontak</span><strong>+{ticket.contact}</strong></div><div><span>Email</span><strong>{ticket.email || 'Tidak diisi'}</strong></div><div><span>Notifikasi Telegram</span><strong>{ticket.notification?.status || 'Belum ada'}</strong></div></div></section>
+      <section className="panel detail-card"><h3>Informasi Pelapor</h3><div className="reporter-profile"><span>{ticket.reporter.split(' ').map(x=>x[0]).join('').slice(0,2)}</span><div><strong>{ticket.reporter}</strong><small>{ticket.reporterType}{ticket.agency ? ` · ${ticket.agency}` : ''}</small></div></div><div className="side-list"><div><span>Nomor kontak</span><strong>+{ticket.contact}</strong></div><div><span>Email</span><strong>{ticket.email || 'Tidak diisi'}</strong></div><div><span>NIK</span><strong>{ticket.nik || 'Tidak diisi'}</strong></div><div><span>Notifikasi Telegram</span><strong>{ticket.notification?.status || 'Belum ada'}</strong></div></div></section>
       <section className="panel detail-card"><h3>Status Publik</h3><p className="side-caption">Keterangan ini terlihat saat pelapor mengecek nomor tiket.</p><textarea rows={5} value={publicNote} onChange={e => setPublicNote(e.target.value)} /><button className="button button-primary full-button" onClick={() => saveTicketUpdate()} disabled={savingStatus}>Perbarui Keterangan</button></section>
       <section className="panel detail-card"><h3>Jejak Waktu</h3><div className="side-list"><div><span>Dibuat</span><strong>{ticket.createdAt}</strong></div><div><span>Terakhir diperbarui</span><strong>{ticket.updatedAt}</strong></div><div><span>Target respons</span><strong className="text-danger">30 menit</strong></div></div></section>
     </aside></div>

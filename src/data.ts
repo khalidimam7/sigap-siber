@@ -45,6 +45,7 @@ export type Ticket = {
   assignee: string
   publicNote: string
   email?: string
+  nik?: string
   occurredAt?: string
   attachments?: Attachment[]
   statusHistory?: TicketStatusHistory[]

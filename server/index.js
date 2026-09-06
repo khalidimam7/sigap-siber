@@ -427,11 +427,22 @@ async function generateTicketId(client = pool) {
   throw new Error('Gagal membuat nomor tiket unik.')
 }
 
+function normalizeNik(value) {
+  return String(value || '').replace(/\s+/g, '')
+}
+
 function validateTicketPayload(payload) {
   const required = ['reporterName', 'contact', 'category', 'title', 'asset', 'chronology', 'impact']
   const missing = required.filter(key => !String(payload[key] || '').trim())
   if (missing.length) {
     const error = new Error(`Field wajib belum lengkap: ${missing.join(', ')}.`)
+    error.statusCode = 422
+    throw error
+  }
+
+  const nik = normalizeNik(payload.nik)
+  if (nik && !/^\d{16}$/.test(nik)) {
+    const error = new Error('NIK harus berupa 16 digit angka.')
     error.statusCode = 422
     throw error
   }
@@ -459,6 +470,7 @@ function toTicket(row, attachments = [], notification = null, statusHistory = []
     agency: row.agency || '',
     contact: row.contact,
     email: row.email || '',
+    nik: row.nik || '',
     category: row.category,
     priority: row.priority,
     status: row.status,
@@ -736,6 +748,7 @@ async function createTicket(payload) {
   validateTicketPayload(payload)
   const client = await pool.connect()
   const reporterType = normalizeReporterType(payload.reporterType)
+  const nik = normalizeNik(payload.nik)
   const now = new Date()
   let ticket
 
@@ -744,9 +757,9 @@ async function createTicket(payload) {
     const id = await generateTicketId(client)
     const ticketResult = await client.query(
       `insert into tickets
-        (id, title, reporter, reporter_type, agency, contact, email, category, priority, status, occurred_at, asset, chronology, impact, assignee, public_note, created_at, updated_at)
+        (id, title, reporter, reporter_type, agency, contact, email, nik, category, priority, status, occurred_at, asset, chronology, impact, assignee, public_note, created_at, updated_at)
        values
-        ($1, $2, $3, $4, $5, $6, $7, $8, 'Sedang', 'Baru', $9, $10, $11, $12, 'Belum ditugaskan', 'Laporan telah diterima dan menunggu pemeriksaan petugas.', $13, $13)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Sedang', 'Baru', $10, $11, $12, $13, 'Belum ditugaskan', 'Laporan telah diterima dan menunggu pemeriksaan petugas.', $14, $14)
        returning *`,
       [
         id,
@@ -756,6 +769,7 @@ async function createTicket(payload) {
         reporterType === 'OPD' ? String(payload.agency || '').trim() : '',
         normalizeContact(payload.contact),
         String(payload.email || '').trim(),
+        nik,
         String(payload.category).trim(),
         String(payload.occurredAt || '').trim(),
         String(payload.asset).trim(),
