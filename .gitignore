@@ -10,6 +10,8 @@ vite.config.d.ts
 .env
 .env.local
 .env.*.local
+.env.production
+.env.*
 !.env.example
 
 # Local backend data
